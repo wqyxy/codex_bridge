@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { execFile } from 'node:child_process';
 import { EventEmitter, once } from 'node:events';
 import { randomUUID } from 'node:crypto';
 import { mkdtemp, readFile, rmdir, unlink, utimes, writeFile } from 'node:fs/promises';
@@ -7,6 +8,8 @@ import { get } from 'node:http';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { setTimeout as delay } from 'node:timers/promises';
+import { fileURLToPath } from 'node:url';
+import { promisify } from 'node:util';
 import { binding, Devices } from '../src/access.mjs';
 import { loadCredentials } from '../src/credentials.mjs';
 import { resolveCodexExecutable } from '../src/codex-executable.mjs';
@@ -88,8 +91,10 @@ class FakeRpc extends EventEmitter {
         if (this.activeWriter) throw new RpcError('thread thread-1 already has an active writer', -32600);
         return { thread: this.thread ?? storedThread, model: 'model-' + this.account };
       case 'turn/start': {
+        if (this.sendRejection) throw this.sendRejection;
         const turn = { id: turnId, status: 'inProgress', items: [] };
         this.notify('turn/started', { threadId: params.threadId, turn });
+        if (this.sendFailure) throw this.sendFailure;
         return { turn };
       }
       case 'turn/steer': return { turnId };
@@ -110,13 +115,13 @@ class FakeRpc extends EventEmitter {
   }
 }
 
-async function fixture(t, { authPath, credentials, sidebar, shared } = {}) {
+async function fixture(t, { authPath, credentials, sidebar, shared, desktopHistory } = {}) {
   const processes = [];
   const devices = new Devices(credentials ?? { verify: async (username, password) => (
     username === loginDetails.username && password === loginDetails.password
   ) });
   const bridge = new Bridge({
-    directories: [work], authPath, sidebar, shared, connect() {
+    directories: [work], authPath, sidebar, shared, desktopHistory, connect() {
       const rpc = new FakeRpc(processes.length + 1);
       processes.push(rpc);
       return rpc;
@@ -588,4 +593,61 @@ test('the shared App Server address must be a loopback WebSocket endpoint', () =
     'http://127.0.0.1:8766', 'ws://127.0.0.1:8766\n', '']) {
     assert.throws(() => loopbackAppServerUrl(url), /共享 App Server 地址/);
   }
+});
+
+test('Bridge ignores an inherited desktop WebSocket override and validates an explicit endpoint', async () => {
+  const run = promisify(execFile);
+  const entry = fileURLToPath(new URL('../src/server.mjs', import.meta.url));
+  const invalidCredentials = fileURLToPath(new URL('../package.json', import.meta.url));
+  const env = { ...process.env, CODEX_APP_SERVER_WS_URL: 'invalid', CODEX_APP_RUNTIME_CLI_PATH: process.execPath };
+  await assert.rejects(run(process.execPath, [entry, '--credentials', invalidCredentials], { env }),
+    { code: 1, stderr: /网页登录配置无效/ });
+  await assert.rejects(run(process.execPath, [entry, '--app-server-url', 'invalid'], { env }),
+    { code: 1, stderr: /共享 App Server 地址/ });
+  await assert.rejects(run(process.execPath, [entry, '--desktop', '--app-server-url', 'ws://127.0.0.1:8766'], { env }),
+    { code: 1, stderr: /不能与 --codex 或 --desktop 一起使用/ });
+});
+
+test('desktop history keeps web login and history while refusing session writes and unverified account data', async t => {
+  const f = await fixture(t, { desktopHistory: true });
+  const { cookie } = await f.login();
+  const { thread } = await data(await f.request('/api/thread?id=' + threadId, { cookie }));
+  assert.equal(thread.id, threadId);
+  const live = await data(await f.request('/api/live?id=' + threadId, { cookie }));
+  const meta = await data(await f.request('/api/meta', { cookie }));
+  assert.match(live.sendBlocked, /无法确认桌面端/);
+  assert.equal(meta.sendBlocked, live.sendBlocked);
+  assert.equal(meta.models.value, null);
+  const account = await data(await f.request('/api/account', { cookie }));
+  assert.equal(account.identity.value, null);
+  assert.equal(account.limits.value, null);
+  const writes = {
+    thread: { directory: 0, operationId: 'new' },
+    send: { threadId, operationId: 'desktop-send', text: '保留草稿' },
+    stop: { threadId, turnId },
+    respond: { id: 'approval-1' },
+    read: { threadId, revision: 'revision-1' },
+  };
+  for (const [action, body] of Object.entries(writes)) {
+    const error = await data(await f.request('/api/' + action, { cookie, body }), 409);
+    assert.equal(error.code, 'DESKTOP_UNAVAILABLE');
+  }
+  assert.deepEqual(f.processes[0].calls.map(({ method }) => method), ['thread/read', 'thread/turns/list']);
+  await data(await f.request('/api/session', { cookie }));
+});
+
+test('deduplicates a send after uncertain delivery and distinguishes a confirmed upstream rejection', async t => {
+  const f = await fixture(t);
+  const { cookie } = await f.login();
+  await data(await f.request('/api/thread?id=' + threadId, { cookie }));
+  const rpc = f.processes[0];
+  const request = operationId => f.request('/api/send', { cookie, body: { threadId, operationId, text: '一条消息' } });
+  rpc.sendRejection = new RpcError('turn refused', -32602);
+  assert.equal((await data(await request('rejected'), 409)).error, 'turn refused');
+  rpc.sendRejection = null;
+  rpc.sendFailure = new RpcError('timed out', 'timeout');
+  const uncertain = await data(await request('uncertain'), 504);
+  assert.equal(uncertain.code, 'SEND_UNCONFIRMED');
+  assert.deepEqual(await data(await request('uncertain'), 504), uncertain);
+  assert.equal(rpc.calls.filter(({ method }) => method === 'turn/start').length, 2);
 });

@@ -11,3 +11,5 @@
 - GET /api/meta 与 GET /api/account 读取模型、模式和账户投影。GET /api/meta?refresh=1 立即从当前 App Server 读取模型目录。POST /api/reconnect 在安全边界重连。
 - POST 请求包含客户端操作 ID 的写入支持去重。错误返回可用于界面展示的原因。
 - 另一个 App Server 持有会话时，发送返回 HTTP 409 和 THREAD_BUSY，浏览器保留当前草稿。共享后台上的发送使用请求中的原 threadId。追加到活动轮次时，响应包含该轮次的 turnId 和 steered: true。
+- 已提交的发送若超时、断线或没有返回有效轮次 ID，返回 HTTP 504 和 SEND_UNCONFIRMED。相同设备与操作 ID 在去重窗口内重复提交，返回原结果。
+- `--desktop` 模式在 `/api/meta` 和 `/api/live` 返回 `sendBlocked` 提示。会话写入返回 HTTP 409 和 DESKTOP_UNAVAILABLE。网页登录、密码和设备管理可正常使用。

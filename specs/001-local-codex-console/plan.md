@@ -34,6 +34,6 @@ Windows 启动时优先使用桌面版随附的 Codex CLI，允许主机通过�
 
 对话界面采用冷灰配色和较紧凑的侧栏。Markdown 通过浏览器 DOM 构建，保留文本并过滤可执行链接。未读状态来自 App Server 回执，采用带版本的标记已读操作，避免覆盖尚未读取的新回复。
 
-通过 `--app-server-url` 选择共享后台。网页使用同一会话 ID 调用原生 `thread/resume` 和 `turn/start`。运行中的会话使用带轮次 ID 的 `turn/steer`。独立后台继续遵循 Codex 的单写入者约束，冲突时网页保留原会话和草稿。切换桌面端需要重新启动桌面应用，并验证桌面工具兼容性。
+通过 `--app-server-url` 显式连接独立管理的回环 App Server。网页使用同一会话 ID 调用原生 `thread/resume` 和 `turn/start`。运行中的会话使用带轮次 ID 的 `turn/steer`。独立后台继续遵循 Codex 的单写入者约束，冲突时网页保留原会话和草稿。
 
-Windows 通过当前用户登录触发的任务启动共享后台。启动脚本等待回环服务就绪后打开桌面端，并在局域网地址可用时启动 Bridge。脚本核对已存在监听的进程与连接，避免重复启动。Bridge 和桌面都支持从 `CODEX_APP_SERVER_WS_URL` 读取默认地址。
+Windows 桌面端通过官方入口独立启动。Bridge 使用显式参数选择共享连接，旧部署的迁移见 [Issue #2 恢复指南](../002-desktop-startup-recovery/quickstart.md)。

@@ -68,7 +68,7 @@
           <label class="sr-only" for="prompt">任务指令</label>
           <textarea id="prompt" name="prompt" rows="3" placeholder="输入任务指令"></textarea>
           <div class="composer-bar">
-            <div class="settings">
+            <div id="composer-settings" class="settings">
               <label><span>模式</span><select id="mode"></select></label>
               <label><span>模型</span><select id="model"></select></label>
               <label><span>推理</span><select id="effort"></select></label>
@@ -80,6 +80,7 @@
             </div>
           </div>
           <p id="composer-note" class="composer-note" role="status"></p>
+          <button id="confirm-send" class="secondary" type="button" hidden>已核对原会话，解除发送锁定</button>
           <p id="send-error" class="error" role="status"></p>
         </form>
       </footer>

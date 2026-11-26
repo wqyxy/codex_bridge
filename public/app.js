@@ -26,8 +26,8 @@ const state = {
 const keyedRequests = new Map();
 const projectStorageKey = 'codex-bridge-projects';
 const expandedProjects = readProjectChoices();
+const drafts = new Map();
 let scheduled;
-let retryOperation;
 let metaVersion = 0;
 let lastCatalogRequest = 0;
 let listVersion = 0;
@@ -38,6 +38,27 @@ let reading;
 function readProjectChoices() {
   try { return new Map(JSON.parse(localStorage.getItem(projectStorageKey) ?? '[]')); }
   catch { return new Map(); }
+}
+
+function draftFor(id) {
+  if (drafts.has(id)) return drafts.get(id);
+  let draft = { text: '', unconfirmed: false };
+  try {
+    const saved = JSON.parse(sessionStorage.getItem('codex-bridge-draft:' + id));
+    if (saved && typeof saved.text === 'string') draft = { text: saved.text, unconfirmed: saved.unconfirmed === true };
+  } catch {}
+  drafts.set(id, draft);
+  return draft;
+}
+
+function saveDraft(id, changes) {
+  const draft = draftFor(id);
+  Object.assign(draft, changes);
+  const key = 'codex-bridge-draft:' + id;
+  try {
+    if (draft.text || draft.unconfirmed) sessionStorage.setItem(key, JSON.stringify(draft));
+    else sessionStorage.removeItem(key);
+  } catch {}
 }
 
 async function api(path, data) {
@@ -113,8 +134,9 @@ function consoleView() {
 
 function connection(value) {
   state.connection = value;
-  $('connection').textContent = connectionLabels[value] ?? connectionLabels.disconnected;
-  $('connection').dataset.connected = String(value === 'connected');
+  const readOnly = state.meta?.sendBlocked || state.live?.sendBlocked;
+  $('connection').textContent = readOnly ? '桌面历史 · 只读' : connectionLabels[value] ?? connectionLabels.disconnected;
+  $('connection').dataset.connected = String(!readOnly && value === 'connected');
   updateComposer();
 }
 
@@ -343,10 +365,9 @@ function openThread(id, thread) {
   state.olderTurns = undefined;
   state.live = null;
   state.preferences = {};
-  retryOperation = undefined;
   keyedRequests.clear();
   try { sessionStorage.setItem('codex-bridge-thread', id); } catch {}
-  $('prompt').value = '';
+  $('prompt').value = draftFor(id).text;
   $('empty').hidden = true;
   $('content').hidden = false;
   $('composer').hidden = false;
@@ -394,7 +415,7 @@ function applyReadState(id, receipt) {
 }
 
 async function markViewed(id, receipt, turns) {
-  if (document.visibilityState !== 'visible' || !receipt?.firstUnread || !receipt.revision) return;
+  if (state.meta?.sendBlocked || state.live?.sendBlocked || document.visibilityState !== 'visible' || !receipt?.firstUnread || !receipt.revision) return;
   if (receipt.firstUnread.type === 'turn' && !turns.some(turn => turn.status !== 'inProgress')) return;
   const key = id + '/' + receipt.revision;
   if (reading === key) return;
@@ -721,8 +742,10 @@ function updateComposer() {
   const modes = meta?.modes.value ?? [];
   const defaults = meta?.defaults.value ?? {};
   const active = live?.turn?.status === 'inProgress';
-  const capable = state.connection === 'connected';
-  const canSteer = active && (capable || state.connection === 'waiting');
+  const blocked = live?.sendBlocked ?? meta?.sendBlocked;
+  const unconfirmed = state.selected && draftFor(state.selected).unconfirmed;
+  const capable = !blocked && state.connection === 'connected';
+  const canSteer = active && !blocked && (capable || state.connection === 'waiting');
   const defaultMode = settings.mode ?? 'default';
 
   if (!modes.some(mode => mode.mode === preferences.mode)) delete preferences.mode;
@@ -761,7 +784,10 @@ function updateComposer() {
   $('model').disabled = !capable || active || !models.length;
   $('effort').disabled = !capable || active || !efforts.length;
   $('speed').disabled = !capable || active || !speeds.length;
-  $('send').disabled = state.busy || state.creating || (active ? !canSteer : !capable);
+  $('composer-settings').hidden = Boolean(blocked);
+  $('reconnect').textContent = blocked ? '刷新历史连接' : '重连 Codex';
+  $('send').disabled = state.busy || state.creating || Boolean(unconfirmed) || (active ? !canSteer : !capable);
+  $('confirm-send').hidden = !unconfirmed || state.busy;
   $('send').textContent = active ? '补充指令' : '发送';
   $('stop').hidden = !active;
   $('stop').disabled = !canSteer;
@@ -770,11 +796,12 @@ function updateComposer() {
   $('prompt').placeholder = active ? '补充当前任务的指令' : '输入任务指令';
   $('thread-status').textContent = statusLabels[live?.turn?.status ?? thread?.status?.type]
     ?? (live?.loaded ? '就绪' : thread ? '已保存' : '读取中');
-  $('composer-note').textContent = active ? '补充指令会追加到当前轮次。' :
+  $('composer-note').textContent = !state.busy && unconfirmed ? '发送结果待确认。请在原会话检查这条消息，再解除发送锁定。' :
+    blocked ?? (active ? '补充指令会追加到当前轮次。' :
     !capable ? connectionLabels[state.connection] :
     meta?.modes.reason ?? meta?.models.reason ??
     (unavailableModel && meta ? '当前会话的模型不在可选目录中。' :
-      Object.keys(preferences).length ? '所选设置将在下一轮生效。' : '');
+      Object.keys(preferences).length ? '所选设置将在下一轮生效。' : ''));
 }
 
 async function newThread() {
@@ -797,26 +824,25 @@ async function newThread() {
 }
 
 async function sendMessage(text) {
-  if (state.busy || state.creating || !text.trim() || !state.selected) return;
+  if ($('send').disabled || !text.trim() || !state.selected) return;
   const id = state.selected;
   const turn = state.live?.turn;
   const expectedTurnId = turn?.status === 'inProgress' ? turn.id : null;
   const { model, ...preferences } = state.preferences;
   const settings = { ...preferences, ...(model && { model }) };
-  const contents = { threadId: id, expectedTurnId, text, settings };
-  const signature = JSON.stringify(contents);
-  const operationId = retryOperation?.signature === signature ? retryOperation.id : operation();
-  retryOperation = { signature, id: operationId };
+  const operationId = operation();
+  saveDraft(id, { text, unconfirmed: true });
   state.busy = true;
   setError('send-error');
   updateComposer();
   try {
-    const { steered } = await api('/api/send', { ...contents, operationId });
-    retryOperation = undefined;
-    if (state.selected === id && $('prompt').value === text) $('prompt').value = '';
+    const { steered } = await api('/api/send', { threadId: id, expectedTurnId, text, settings, operationId });
+    const clear = draftFor(id).text === text;
+    saveDraft(id, { unconfirmed: false, ...(clear && { text: '' }) });
+    if (clear && state.selected === id) $('prompt').value = '';
     if (!steered && state.selected === id) state.preferences = {};
   } catch (error) {
-    if (error.status) retryOperation = undefined;
+    if (error.status && error.code !== 'SEND_UNCONFIRMED') saveDraft(id, { unconfirmed: false });
     if (state.selected === id) {
       setError('send-error', error);
     }
@@ -938,6 +964,15 @@ $('new-thread').onclick = $('empty-new').onclick = () => newThread();
 $('more-threads').onclick = () => loadList(true);
 $('more-turns').onclick = () => loadHistory(true);
 $('send-form').onsubmit = event => { event.preventDefault(); sendMessage($('prompt').value); };
+$('prompt').oninput = () => {
+  if (state.selected) saveDraft(state.selected, { text: $('prompt').value });
+};
+$('confirm-send').onclick = () => {
+  if (!state.selected || state.busy) return;
+  saveDraft(state.selected, { unconfirmed: false });
+  setError('send-error');
+  updateComposer();
+};
 $('prompt').onkeydown = event => {
   if (event.key === 'Enter' && (event.ctrlKey || event.metaKey) && !event.isComposing && !$('send').disabled) {
     event.preventDefault();

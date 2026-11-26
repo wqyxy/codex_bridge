@@ -3,6 +3,8 @@
 **日期** 2026-11-26  
 **环境** Windows，Node.js 24.18.0，Codex CLI 0.153.2
 
+下文记录首版部署的历史结果。当前 Windows 启动和接续状态见 [Issue #2 验证记录](../002-desktop-startup-recovery/verification.md)。
+
 ## 默认共享及 Windows 登录启动
 
 - 注册当前 Windows 用户的 `CodexBridge-Shared-Startup` 登录任务，设置用户级 `CODEX_APP_SERVER_WS_URL` 为 `ws://127.0.0.1:8766`。通过 Windows 启动应用设置关闭原有 ChatGPT 启动项，避免两个入口并行启动。

@@ -15,6 +15,7 @@ const message = error => error?.message || 'Codex 返回未知错误。';
 const unavailable = error => ({ value: null, reason: message(error) });
 const available = value => ({ value, reason: null });
 const writerConflict = () => new HttpError(409, '原会话由另一个 Codex App Server 持有。请连接同一个 App Server，或等原客户端释放会话后重试。', 'THREAD_BUSY');
+const desktopHistoryReason = 'Bridge 无法确认桌面端当前持有此会话。网页仅显示已保存的记录，请回到桌面端发送。';
 
 export class Bridge extends EventEmitter {
   #rpc;
@@ -29,14 +30,16 @@ export class Bridge extends EventEmitter {
   #catalog;
   #account;
   #shared;
+  #desktopHistory;
   #working = new Set();
 
-  constructor({ directories, authPath, sidebar, shared = false, connect = () => new AppServer() }) {
+  constructor({ directories, authPath, sidebar, shared = false, desktopHistory = false, connect = () => new AppServer() }) {
     super();
     this.directories = directories;
     this.authPath = authPath;
     this.sidebar = sidebar;
     this.#shared = shared;
+    this.#desktopHistory = desktopHistory;
     this.connect = connect;
   }
 
@@ -256,6 +259,7 @@ export class Bridge extends EventEmitter {
   }
 
   async markRead(threadId, revision) {
+    this.#requireWriter();
     if (typeof revision !== 'string' || !revision.length || revision.length > 128) {
       throw new HttpError(400, '未读回执版本无效。');
     }
@@ -268,10 +272,12 @@ export class Bridge extends EventEmitter {
     const entry = this.#threads.get(threadId);
     const pending = [...this.#requests.values()].filter(request => request.threadId === threadId)
       .map(({ responses, rpcId, ...request }) => request);
-    return { turn: entry?.turn ?? null, loaded: entry?.loaded ?? false, settings: entry?.settings ?? null, pending, state: this.state };
+    return { turn: entry?.turn ?? null, loaded: entry?.loaded ?? false, settings: entry?.settings ?? null, pending, state: this.state,
+      ...(this.#desktopHistory && { sendBlocked: desktopHistoryReason }) };
   }
 
   async create(index) {
+    this.#requireWriter();
     const cwd = this.directories[index];
     if (!Number.isInteger(index) || !cwd) throw new HttpError(400, '请选择主机提供的工作目录。');
     return this.#action(async () => {
@@ -285,6 +291,7 @@ export class Bridge extends EventEmitter {
   }
 
   async send({ threadId, expectedTurnId, operationId, text, settings = {} }) {
+    this.#requireWriter();
     if (typeof text !== 'string' || !text.trim() || text.length > 65_536) throw new HttpError(400, '请输入有效的任务内容。');
     return this.#action(async () => {
       const input = [{ type: 'text', text, text_elements: [] }];
@@ -302,11 +309,11 @@ export class Bridge extends EventEmitter {
         }
         if (active(entry.turn)) {
           if (!this.#shared && !expectedTurnId) throw new HttpError(409, '此会话已有任务正在执行。');
-          const result = await rpc.call('turn/steer', { threadId, expectedTurnId: entry.turn.id, input, clientUserMessageId });
+          const result = await this.#submitInput(rpc, 'turn/steer', { threadId, expectedTurnId: entry.turn.id, input, clientUserMessageId });
           return { ...result, steered: true };
         }
         const options = await this.#turnOptions(rpc, entry, settings);
-        const { turn } = await rpc.call('turn/start', { threadId, input, clientUserMessageId, ...options });
+        const { turn } = await this.#submitInput(rpc, 'turn/start', { threadId, input, clientUserMessageId, ...options });
         if (!entry.turn || entry.turn.id !== turn.id) entry.turn = turnSummary(turn);
         if (!entry.thread.preview) {
           entry.thread.preview = text.trim().split('\n')[0].slice(0, 120);
@@ -321,6 +328,7 @@ export class Bridge extends EventEmitter {
   }
 
   async stop(threadId, turnId) {
+    this.#requireWriter();
     if (this.#threads.get(threadId)?.turn?.id !== turnId || !active(this.#threads.get(threadId)?.turn)) {
       throw new HttpError(409, '此轮任务已结束。');
     }
@@ -329,6 +337,7 @@ export class Bridge extends EventEmitter {
   }
 
   async respond(id, body) {
+    this.#requireWriter();
     const entry = this.#requests.get(id);
     if (!entry || entry.status !== 'open') throw new HttpError(409, '该请求已提交或已结束。');
     const value = requestResponse(entry, body);
@@ -336,6 +345,21 @@ export class Bridge extends EventEmitter {
     this.#emit('live', entry.threadId);
     await this.#rpc.respond(entry.rpcId, value);
     return { submitted: true };
+  }
+
+  #requireWriter() {
+    if (this.#desktopHistory) throw new HttpError(409, desktopHistoryReason, 'DESKTOP_UNAVAILABLE');
+  }
+
+  async #submitInput(rpc, method, params) {
+    try {
+      const result = await rpc.call(method, params);
+      if (typeof (method === 'turn/start' ? result?.turn?.id : result?.turnId) === 'string') return result;
+      throw new Error('Missing turn ID');
+    } catch (error) {
+      if (error instanceof RpcError && Number.isInteger(error.code)) throw error;
+      throw new HttpError(504, '发送结果待确认。请先核对原会话中的消息，再决定是否重发。', 'SEND_UNCONFIRMED');
+    }
   }
 
   async #action(fn) {
@@ -447,6 +471,11 @@ export class Bridge extends EventEmitter {
   }
 
   async meta(index, refreshCatalog = false) {
+    if (this.#desktopHistory) {
+      const unavailable = { value: null, reason: desktopHistoryReason };
+      return { models: unavailable, modes: unavailable, defaults: unavailable, directories: this.directories,
+        state: this.state, sendBlocked: desktopHistoryReason };
+    }
     const rpc = await this.#getRpc();
     const cwd = this.directories[index] ?? this.directories[0];
     const [catalog, defaults] = await Promise.all([
@@ -482,6 +511,10 @@ export class Bridge extends EventEmitter {
   }
 
   async account() {
+    if (this.#desktopHistory) {
+      const unavailable = { value: null, reason: 'Bridge 无法核对当前桌面账户。' };
+      return { identity: unavailable, limits: unavailable, usage: unavailable };
+    }
     const rpc = await this.#getRpc();
     if (this.#account && Date.now() < this.#account.until) return this.#account.promise;
     const promise = Promise.all([

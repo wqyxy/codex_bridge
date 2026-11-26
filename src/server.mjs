@@ -223,11 +223,13 @@ async function main() {
     cwd: { type: 'string', multiple: true },
     codex: { type: 'string' },
     'app-server-url': { type: 'string' },
+    desktop: { type: 'boolean' },
     credentials: { type: 'string' },
     'reset-login': { type: 'boolean' },
   } });
   if (values.help) {
-    console.log('node src/server.mjs [--lan <局域网 IPv4>] [--port 8765] [--cwd <目录>] [--codex <CLI 路径> | --app-server-url <ws://127.0.0.1:端口>] [--credentials <文件>] [--reset-login]');
+    console.log('node src/server.mjs [--lan <局域网 IPv4>] [--port 8765] [--cwd <目录>] [--codex <CLI 路径>] [--desktop | --app-server-url <回环 WebSocket>] [--credentials <文件>] [--reset-login]');
+    console.log('--desktop  浏览桌面会话的已保存记录，保留草稿。桌面写入暂不可用。');
     return;
   }
 
@@ -242,10 +244,10 @@ async function main() {
   const directories = [...new Set(paths)];
   const codexHome = resolve(process.env.CODEX_HOME || join(homedir(), '.codex'));
   const authPath = join(codexHome, 'auth.json');
-  if (values['app-server-url'] !== undefined && values.codex) {
-    throw new Error('共享模式下由主机指定 App Server，请去掉 --codex。');
+  const target = values['app-server-url'];
+  if (target !== undefined && (values.codex || values.desktop)) {
+    throw new Error('--app-server-url 不能与 --codex 或 --desktop 一起使用。');
   }
-  const target = values['app-server-url'] ?? (values.codex ? undefined : (process.env.CODEX_APP_SERVER_WS_URL || undefined));
   const sharedUrl = target === undefined ? undefined : loopbackAppServerUrl(target);
   const executable = sharedUrl ? undefined : await resolveCodexExecutable(values.codex);
   const { credentials, initialPassword } = await loadCredentials(
@@ -254,8 +256,14 @@ async function main() {
   const devices = new Devices(credentials);
   const bridge = new Bridge({
     directories, authPath: sharedUrl ? undefined : authPath, sidebar: new DesktopSidebar(codexHome),
-    shared: Boolean(sharedUrl),
-    connect: () => new AppServer({ url: sharedUrl, executable, cwd: directories[0] }),
+    shared: Boolean(sharedUrl), desktopHistory: values.desktop,
+    connect: () => {
+      const env = { ...process.env };
+      for (const key of Object.keys(env)) {
+        if (key.toUpperCase() === 'CODEX_APP_SERVER_WS_URL') delete env[key];
+      }
+      return new AppServer({ url: sharedUrl, executable, cwd: directories[0], env });
+    },
   });
   const app = httpConsole({ bridge, devices, address });
   await bridge.start();

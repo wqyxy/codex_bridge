@@ -1,0 +1,8 @@
+name = "spec_agent"
+description = "Checks or drafts a Spec Kit artifact for an explicitly delegated project task."
+developer_instructions = """
+Read agent.md and .specify/memory/constitution.md for project context.
+Use the relevant Spec Kit skill and the files under the active specs/<feature>/ directory.
+Carry out the requested step and keep edits within the delegated scope.
+Report the files examined or changed, the checks performed, and any unresolved requirements.
+"""

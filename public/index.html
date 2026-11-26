@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f2f5f4">
+  <title>Codex Bridge · 本机控制台</title>
+  <link rel="stylesheet" href="/styles.css">
+  <script src="/app.js" type="module"></script>
+</head>
+<body>
+  <main id="login-view" class="login-view" hidden>
+    <section class="login-card" aria-labelledby="login-title">
+      <div class="identity"><span class="mark" aria-hidden="true">C<span>_</span></span><span>Codex Bridge</span></div>
+      <h1 id="login-title">登录 Codex Bridge</h1>
+      <form id="login-form">
+        <label for="login-username">用户名</label>
+        <input id="login-username" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" maxlength="48" required>
+        <label for="login-password">密码</label>
+        <input id="login-password" name="password" type="password" autocomplete="current-password" maxlength="128" required>
+        <label for="login-name">设备名称 <span class="muted">（可选）</span></label>
+        <input id="login-name" name="name" maxlength="48" placeholder="例如，我的手机">
+        <button class="primary" type="submit">登录</button>
+        <p id="login-error" class="error" role="status"></p>
+      </form>
+    </section>
+  </main>
+
+  <div id="console-view" class="console" hidden>
+    <aside class="sidebar" id="sidebar" aria-label="本机会话">
+      <div class="identity"><span class="mark" aria-hidden="true">C<span>_</span></span><span>Codex Bridge</span></div>
+      <button id="new-thread" class="new-button" type="button"><span aria-hidden="true">+</span> 新建会话</button>
+      <label class="directory-label" for="directory">新会话目录</label>
+      <select id="directory" aria-label="新会话目录"></select>
+      <div class="sidebar-heading"><h2>会话</h2><button class="quiet" id="reload-history" type="button">刷新</button></div>
+      <nav id="threads" aria-label="项目会话"></nav>
+      <button id="more-threads" class="quiet more" type="button" hidden>更多历史</button>
+      <p id="history-error" class="error" role="status"></p>
+    </aside>
+
+    <main class="workspace">
+      <header class="topbar">
+        <button id="menu-toggle" class="secondary menu-toggle" type="button" aria-controls="sidebar" aria-expanded="false">会话</button>
+        <div class="workspace-label">本机控制台</div>
+        <div id="connection" class="connection" role="status">正在连接</div>
+        <button id="account-button" type="button" class="secondary">账户与用量</button>
+      </header>
+      <section id="conversation" class="conversation" aria-label="会话内容">
+        <div id="empty" class="empty">
+          <div class="empty-icon" aria-hidden="true"><span>&gt;_</span></div>
+          <h1>在浏览器里继续本机任务</h1>
+          <p>选择历史会话，或从主机提供的目录开始。</p>
+          <button id="empty-new" class="primary" type="button">新建会话</button>
+        </div>
+        <div id="content" class="content" hidden>
+          <header class="thread-heading">
+            <div><h1 id="thread-title"></h1><p id="thread-path"></p></div>
+            <span id="thread-status" class="state-label"></span>
+          </header>
+          <div class="previous"><button id="more-turns" class="secondary" type="button" hidden>加载较早的消息</button></div>
+          <div id="timeline"></div>
+          <div id="pending" aria-live="polite"></div>
+          <p id="thread-error" class="error" role="status"></p>
+        </div>
+      </section>
+      <footer id="composer" class="composer" hidden>
+        <form id="send-form">
+          <label class="sr-only" for="prompt">任务指令</label>
+          <textarea id="prompt" name="prompt" rows="3" placeholder="输入任务指令"></textarea>
+          <div class="composer-bar">
+            <div class="settings">
+              <label><span>模式</span><select id="mode"></select></label>
+              <label><span>模型</span><select id="model"></select></label>
+              <label><span>推理</span><select id="effort"></select></label>
+              <label><span>速度</span><select id="speed"></select></label>
+            </div>
+            <div class="actions">
+              <button id="stop" class="secondary stop" type="button" hidden>停止</button>
+              <button class="primary" id="send" type="submit">发送</button>
+            </div>
+          </div>
+          <p id="composer-note" class="composer-note" role="status"></p>
+          <p id="send-error" class="error" role="status"></p>
+        </form>
+      </footer>
+    </main>
+  </div>
+
+  <dialog id="account-dialog">
+    <header class="dialog-header">
+      <h2>账户与用量</h2>
+      <button id="change-password" class="secondary" type="button">修改网页密码</button>
+      <form method="dialog"><button class="secondary">关闭</button></form>
+    </header>
+    <div id="account-data" class="account-data" aria-live="polite"></div>
+    <footer class="dialog-footer">
+      <button id="logout" class="secondary" type="button">退出网页登录</button>
+      <button id="reconnect" class="primary" type="button">重连 Codex</button>
+    </footer>
+    <p id="account-error" class="error" role="status"></p>
+  </dialog>
+
+  <dialog id="password-dialog" aria-labelledby="password-title">
+    <header class="dialog-header">
+      <h2 id="password-title">修改网页密码</h2>
+      <form method="dialog"><button class="secondary">关闭</button></form>
+    </header>
+    <p class="muted">新密码至少 12 个字符。保存后，其他设备需要重新登录。</p>
+    <form id="password-form" class="password-form">
+      <label for="current-password">当前密码</label>
+      <input id="current-password" name="currentPassword" type="password" autocomplete="current-password" maxlength="128" required>
+      <label for="new-password">新密码</label>
+      <input id="new-password" name="newPassword" type="password" autocomplete="new-password" minlength="12" maxlength="128" required>
+      <label for="confirm-password">确认新密码</label>
+      <input id="confirm-password" name="confirmation" type="password" autocomplete="new-password" minlength="12" maxlength="128" required>
+      <button id="save-password" class="primary" type="submit">保存新密码</button>
+      <p id="password-error" class="error" role="status"></p>
+      <p id="password-status" class="success" role="status"></p>
+    </form>
+  </dialog>
+</body>
+</html>
